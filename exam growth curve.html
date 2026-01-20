@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>成績分析系統（個人Z分數+班平均）</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+body { font-family: Arial; margin: 20px; }
+h1 { text-align: center; }
+table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+input[type=number], input[type=text] { width: 80px; }
+select, button { margin-top: 10px; font-size: 14px; padding: 2px 5px; }
+canvas { margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<h1>成績分析系統（個人Z分數+班平均）</h1>
+
+<p>手動輸入分數：</p>
+<table id="scoreTable">
+<thead>
+<tr>
+<th>姓名</th><th>考試1</th><th>考試2</th><th>考試3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><input type="text" value="王小明"></td>
+<td><input type="number" value="75"></td>
+<td><input type="number" value="82"></td>
+<td><input type="number" value="90"></td>
+</tr>
+<tr>
+<td><input type="text" value="李小華"></td>
+<td><input type="number" value="88"></td>
+<td><input type="number" value="85"></td>
+<td><input type="number" value="80"></td>
+</tr>
+<tr>
+<td><input type="text" value="張三"></td>
+<td><input type="number" value="60"></td>
+<td><input type="number" value="70"></td>
+<td><input type="number" value="75"></td>
+</tr>
+</tbody>
+</table>
+<button onclick="addEmptyRow()">新增學生</button>
+<button onclick="saveManualData()">更新手動輸入資料</button>
+
+<p>或匯入 Excel：</p>
+<input type="file" id="excelFile" accept=".xlsx,.xls">
+
+<p>選擇學生查看個人 Z 分數折線圖：</p>
+<select id="studentSelect"></select>
+
+<table id="statsTable">
+<thead>
+<tr>
+<th>姓名</th><th>考試</th><th>原始分數</th><th>班平均</th><th>標準差</th><th>Z分數</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+
+<canvas id="chart" width="800" height="400"></canvas>
+
+<script>
+let students = [];
+let chart;
+
+// 計算平均、標準差、Z分數
+function calcStats(arr){
+    const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
+    const std = Math.sqrt(arr.reduce((a,b)=>a+Math.pow(b-mean,2),0)/arr.length);
+    const z = arr.map(x => std===0 ? 0 : (x-mean)/std);
+    return {mean, std, z};
+}
+
+// 儲存手動輸入資料
+function saveManualData(){
+    const table = document.getElementById('scoreTable').tBodies[0];
+    students = [];
+    for(let r=0;r<table.rows.length;r++){
+        const row = table.rows[r];
+        const student = {姓名: row.cells[0].querySelector('input').value};
+        for(let c=1;c<row.cells.length;c++){
+            student['考試'+c] = Number(row.cells[c].querySelector('input').value);
+        }
+        students.push(student);
+    }
+    localStorage.setItem('studentData', JSON.stringify(students));
+    populateStudentSelect();
+    updateChart();
+}
+
+// 新增空行
+function addEmptyRow(){
+    const tbody = document.getElementById('scoreTable').tBodies[0];
+    const row = tbody.insertRow();
+    const cells = ['姓名','考試1','考試2','考試3'];
+    for(let i=0;i<cells.length;i++){
+        const cell = row.insertCell();
+        const input = document.createElement('input');
+        input.type = i===0 ? 'text' : 'number';
+        cell.appendChild(input);
+    }
+}
+
+// 匯入 Excel
+document.getElementById('excelFile').addEventListener('change', function(e){
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = function(evt){
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data,{type:'array'});
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        students = jsonData.map(row=>{
+            let obj = {姓名: row['姓名']};
+            Object.keys(row).forEach(k=>{
+                if(k!=='姓名') obj[k] = Number(row[k]);
+            });
+            return obj;
+        });
+        localStorage.setItem('studentData', JSON.stringify(students));
+        populateStudentSelect();
+        updateChart();
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+// 載入 localStorage
+window.addEventListener('load', ()=>{
+    const stored = localStorage.getItem('studentData');
+    if(stored){
+        students = JSON.parse(stored);
+        populateStudentSelect();
+        updateChart();
+    }
+});
+
+// 生成學生下拉選單
+function populateStudentSelect(){
+    const select = document.getElementById('studentSelect');
+    select.innerHTML = '';
+    students.forEach(s=>{
+        const opt = document.createElement('option');
+        opt.value = s.姓名;
+        opt.text = s.姓名;
+        select.appendChild(opt);
+    });
+    select.addEventListener('change', updateChart);
+}
+
+// 更新圖表和表格
+function updateChart(){
+    if(students.length===0) return;
+    const select = document.getElementById('studentSelect');
+    const name = select.value || students[0].姓名;
+    const exams = Object.keys(students[0]).filter(k=>k!=='姓名');
+
+    // 計算每次考試班平均和標準差
+    const classStats = exams.map(exam=>{
+        const scores = students.map(s=>s[exam]);
+        const mean = scores.reduce((a,b)=>a+b,0)/scores.length;
+        const std = Math.sqrt(scores.reduce((a,b)=>a+Math.pow(b-mean,2),0)/scores.length);
+        return {mean, std};
+    });
+
+    // 個人 Z 分數
+    const student = students.find(s=>s.姓名===name);
+    const studentZ = exams.map((exam,i) => {
+        return classStats[i].std === 0 ? 0 : (student[exam] - classStats[i].mean)/classStats[i].std;
+    });
+
+    // 更新表格
+    const tbody = document.querySelector('#statsTable tbody');
+    tbody.innerHTML = '';
+    for(let i=0;i<exams.length;i++){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${name}</td>
+                        <td>${exams[i]}</td>
+                        <td>${student[exams[i]]}</td>
+                        <td>${classStats[i].mean.toFixed(2)}</td>
+                        <td>${classStats[i].std.toFixed(2)}</td>
+                        <td>${studentZ[i].toFixed(2)}</td>`;
+        tbody.appendChild(tr);
+    }
+
+    // 繪製圖表（只顯示個人 Z 分數）
+    const ctx = document.getElementById('chart').getContext('2d');
+    if(chart) chart.destroy();
+    chart = new Chart(ctx,{
+        type:'line',
+        data:{
+            labels: exams,
+            datasets:[{
+                label: name + ' Z 分數',
+                data: studentZ,
+                borderColor:'red',
+                backgroundColor:'rgba(255,0,0,0.2)',
+                fill:false,
+                tension:0.2
+            }]
+        },
+        options:{
+            responsive:true,
+            plugins:{legend:{display:true}},
+            scales:{
+                y:{min:-3,max:3,title:{display:true,text:'Z分數'}},
+                x:{title:{display:true,text:'考試次數'}}
+            }
+        }
+    });
+}
+</script>
+
+</body>
+</html>
